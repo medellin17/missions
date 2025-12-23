@@ -26,6 +26,7 @@ from handlers import (
     notification,
     theme_week,
     mission_groups,
+    mission_groups_user,
 )
 from handlers.admin import admin_analytics, admin_missions, admin_users
 
@@ -93,11 +94,13 @@ async def setup_dispatcher(bot: Bot, storage: RedisStorage) -> Dispatcher:
     dp.include_router(notification.router)
     dp.include_router(theme_week. router)
     dp.include_router(mission_groups.router)
+    dp.include_router(mission_groups_user.router)
     
     # Admin handlers (в отдельной папке)
     dp.include_router(admin_analytics.router)
     dp.include_router(admin_missions.router)
     dp.include_router(admin_users.router)
+    
     
     logger.info("✅ All routers registered")
     

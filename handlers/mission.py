@@ -34,6 +34,10 @@ from services.mission_service import MissionService
 from services.completion_service import CompletionService
 from keyboards.mission_kb import get_difficulty_keyboard, get_mission_keyboard
 from core.exceptions import NoChargesLeft, MissionNotFound
+from sqlalchemy import select, and_  # Убедитесь что есть
+from models.mission_group import MissionGroup  # Добавить
+from models.user_group_progress import UserGroupProgress  # Добавить
+from services.user_progress_service import UserProgressService  # Добавить
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -46,9 +50,11 @@ class MissionState(StatesGroup):
 
 
 @router.message(Command("mission"))
-async def cmd_mission(message: Message, db_session:  AsyncSession, state: FSMContext) -> None:
+async def cmd_mission(message: Message, db_session: AsyncSession, state: FSMContext) -> None:
     """
-    Команда /mission — получить новую миссию.
+    Команда /mission — получить новую миссию. 
+    Теперь:  если пользователь в активной группе → миссия из группы,
+    иначе → обычная случайная миссия.
     
     Args:
         message: Telegram сообщение
@@ -58,7 +64,7 @@ async def cmd_mission(message: Message, db_session:  AsyncSession, state: FSMCon
     try:
         user_service = UserService(db_session)
         user = await user_service.get_or_create_user(message.from_user.id)
-        user = await user_service. check_and_reset_charges(user)
+        user = await user_service.check_and_reset_charges(user)
 
         # Проверка на блокировку
         if getattr(user, "is_banned", False):
@@ -66,16 +72,52 @@ async def cmd_mission(message: Message, db_session:  AsyncSession, state: FSMCon
             return
 
         # Проверка зарядов
-        if user. charges <= 0:
+        if user.charges <= 0:
             raise NoChargesLeft(user. user_id)
 
         await state.clear()
 
-        # Получаем случайную миссию
-        mission_service = MissionService(db_session)
-        mission = await mission_service.get_random_mission(user. level)
-
+        # ========== НОВОЕ:  Проверяем активную группу пользователя ==========
+        mission = None
+        group_id = None
+        
+        progress_service = UserProgressService(db_session)
+        
+        # Получаем активные группы пользователя
+        user_progress_result = await db_session.execute(
+            select(UserGroupProgress).where(
+                and_(
+                    UserGroupProgress. user_id == user.user_id,
+                    UserGroupProgress.is_completed == False
+                )
+            )
+        )
+        active_progress = user_progress_result.scalar_one_or_none()
+        
+        if active_progress: 
+            # Пользователь в активной группе → получаем миссию из группы
+            mission = await progress_service.get_next_mission(
+                user. user_id,
+                active_progress.group_id
+            )
+            group_id = active_progress.group_id
+            
+            if mission:
+                self.logger.info(f"🎲 User {user.user_id} got mission {mission.id} from group {group_id}")
+            else:
+                self.logger. warning(f"❌ No mission found in group {group_id} for user {user.user_id}")
+        
+        # Если нет группы или нет миссии в группе → обычная случайная миссия
         if not mission: 
+            mission_service = MissionService(db_session)
+            
+            # Используем weighted random для персонализации
+            if hasattr(user, 'preferences') and user.preferences:
+                mission = await mission_service.get_mission_by_weighted_random(user)
+            else:
+                mission = await mission_service.get_random_mission(user. level)
+
+        if not mission:
             await message.answer(
                 "😢 <b>Не удалось найти миссию. </b>\n\n"
                 "Попробуйте позже или свяжитесь с администратором.",
@@ -84,7 +126,11 @@ async def cmd_mission(message: Message, db_session:  AsyncSession, state: FSMCon
             return
 
         # Сохраняем в state
-        await state.update_data(mission_id=mission.id, mission_text=mission.text)
+        await state.update_data(
+            mission_id=mission.id,
+            mission_text=mission.text,
+            group_id=group_id  # Запомним группу если есть
+        )
         await state.set_state(MissionState.waiting_for_report)
 
         # Формируем текст миссии
@@ -93,26 +139,37 @@ async def cmd_mission(message: Message, db_session:  AsyncSession, state: FSMCon
             "medium": "🟡",
             "hard":  "🔴",
         }
-        emoji = difficulty_emoji. get(mission.difficulty, "🎯")
+        emoji = difficulty_emoji.get(mission.difficulty, "🎯")
+
+        # Добавляем информацию о группе если есть
+        group_info = ""
+        if group_id: 
+            group_result = await db_session.execute(
+                select(MissionGroup).where(MissionGroup.id == group_id)
+            )
+            group = group_result.scalar_one_or_none()
+            if group:
+                group_info = f"\n🎲 <i>Из группы: {group.name}</i>"
 
         text = (
             f"🎯 <b>Миссия #{mission.id}</b>\n\n"
             f"<b>{mission.text}</b>\n\n"
             f"{emoji} <i>Сложность: {mission.difficulty}</i>\n"
-            f"⭐ <i>Награда: {mission.points_reward} очков</i>\n\n"
+            f"⭐ <i>Награда: {mission.points_reward} очков</i>"
+            f"{group_info}\n\n"
             f"<b>Как отчитаться:</b>\n"
             "1. Выполните миссию\n"
             "2. Напишите сюда описание или отправьте фото\n"
             "3. Получите очки и опыт!"
         )
 
-        await message.answer(text, parse_mode="HTML")
+        await message. answer(text, parse_mode="HTML")
 
         # Применяем заряд
         await user_service.consume_charge(user)
         await db_session.commit()
 
-    except NoChargesLeft: 
+    except NoChargesLeft:
         await message.answer(
             "⚡ <b>У вас закончились заряды!</b>\n\n"
             "💡 Они восстановятся автоматически в 00:00 по МСК.\n"
@@ -339,3 +396,59 @@ async def cmd_done(message: Message, db_session: AsyncSession, state: FSMContext
     except Exception as e:
         logger.error(f"Error in cmd_done: {e}", exc_info=True)
         await message.answer("❌ Ошибка при обработке отчета.")
+        
+@router.callback_query(F.data. startswith("rate: "))
+async def rate_mission(callback:  CallbackQuery, db_session: AsyncSession, state:  FSMContext) -> None:
+    """
+    Обработка оценки миссии (1-5).
+    Теперь обновляет preferences пользователя.
+    """
+    try:
+        rating = int(callback.data.split(":")[1])
+        data = await state.get_data()
+        completion_id = data.get("completion_id")
+        mission_id = data.get("mission_id")
+
+        if not completion_id: 
+            await callback.answer("❌ Ошибка:  выполнение не найдено.")
+            return
+
+        # Обновляем оценку в БД
+        result = await db_session.execute(
+            select(Completion).where(Completion.id == completion_id)
+        )
+        completion = result.scalar_one_or_none()
+
+        if completion:
+            completion.rating = rating
+            await db_session.commit()
+
+        # ========== НОВОЕ: Обновляем preferences пользователя ==========
+        mission_service = MissionService(db_session)
+        await mission_service.update_user_preferences(
+            callback.from_user.id,
+            mission_id,
+            rating
+        )
+
+        ratings_text = {
+            1: "😢 Не очень.. .",
+            2: "😕 Нормально",
+            3: "😐 Средненько",
+            4: "😊 Хорошо! ",
+            5: "🤩 Отлично! ",
+        }
+
+        await callback. message.edit_text(
+            f"✅ <b>Спасибо за оценку! </b>\n\n"
+            f"{ratings_text. get(rating, '')}\n\n"
+            f"Ваш отзыв помогает улучшать качество миссий и персонализировать подбор.",
+            parse_mode="HTML"
+        )
+
+        await state.clear()
+        await callback.answer()
+
+    except Exception as e: 
+        logger.error(f"Error in rate_mission: {e}", exc_info=True)
+        await callback.answer("❌ Ошибка при обработке оценки.", show_alert=True)

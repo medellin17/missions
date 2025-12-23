@@ -14,6 +14,7 @@ __all__ = [
     "notification",
     "theme_week",
     "mission_groups",
+    "mission_groups_user",
     "analytics",
     "missions",
     "users",

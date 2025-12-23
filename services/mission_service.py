@@ -179,3 +179,66 @@ class MissionService:
 
         await self.db_session.commit()
         return True
+        
+    """Добавить эти методы в класс MissionService"""
+
+    async def update_user_preferences(self, user_id: int, mission_id: int, rating: int) -> None:
+        """
+        Обновить предпочтения пользователя на основе оценки миссии
+        
+        Args:
+            user_id: ID пользователя
+            mission_id: ID миссии
+            rating: Оценка (1-5)
+        """
+        try:
+            # Получаем миссию с тегами
+            mission_result = await self.db_session.execute(
+                select(Mission).where(Mission.id == mission_id)
+            )
+            mission = mission_result. scalar_one_or_none()
+            
+            if not mission: 
+                return
+            
+            # Получаем пользователя
+            user_result = await self.db_session. execute(
+                select(User).where(User.user_id == user_id)
+            )
+            user = user_result.scalar_one_or_none()
+            
+            if not user:
+                return
+            
+            # Инициализируем preferences если пусто
+            if not user.preferences:
+                user.preferences = {}
+            
+            # Определяем вес на основе оценки
+            # Высокая оценка (4-5) → +1, низкая (1-2) → -0.5, средняя (3) → 0
+            weight = 0
+            if rating >= 4:
+                weight = 1.0
+            elif rating <= 2:
+                weight = -0.5
+            else:  # rating == 3
+                weight = 0.0
+            
+            # Обновляем все теги этой миссии
+            tags = mission.tags or []  # Предполагаем что tags это list
+            
+            for tag in tags:
+                # Обновляем или создаем счетчик для тега
+                current = user.preferences.get(tag, 0)
+                user.preferences[tag] = current + weight
+            
+            # Сохраняем обновленные preferences
+            await self.db_session.commit()
+            
+            logger.info(
+                f"📊 Updated preferences for user {user_id} "
+                f"on mission {mission_id} with rating {rating}"
+            )
+            
+        except Exception as e:
+            logger. error(f"Error updating user preferences: {e}", exc_info=True)
