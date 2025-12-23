@@ -2,20 +2,22 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Установка системных зависимостей
-RUN apt-get update && apt-get install -y \
+# Установка системных зависимостей (минимум)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+# Копируем requirements и устанавливаем зависимости
+COPY requirements. txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем все файлы проекта
-COPY . .
+# Копируем весь проект
+COPY . . 
 
-# Отладка: проверим, что файлы есть
-RUN ls -la /app/core/
-RUN cat /app/core/database.py | grep -n "def init_db"
+# Health check (для Docker Compose и оркестраторов)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import asyncio; from core.database import test_connection; asyncio.run(test_connection())" || exit 1
 
-CMD ["python", "-m", "bot.main"]
+# Запуск бота
+CMD ["python", "-m", "bot. main"]

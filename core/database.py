@@ -1,29 +1,50 @@
 #/core/database.py
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from sqlalchemy.orm import declarative_base
-from sqlalchemy import text
-from core.config import settings
-import logging
+"""
+Инициализация базы данных и сессий. 
+Использует ЕДИНСТВЕННЫЙ Base из models/base.py
+"""
 
+from __future__ import annotations
+
+import logging
+from typing import AsyncGenerator
+
+from sqlalchemy. ext.asyncio import (
+    create_async_engine,
+    async_sessionmaker,
+    AsyncSession,
+)
+from sqlalchemy import text
+
+from core.config import settings
+from models.base import Base  # ✅ Импортируем ЕДИНСТВЕННЫЙ Base
 
 logger = logging.getLogger(__name__)
 
-# Создаем асинхронный движок
+# ========== ENGINE ==========
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=False,  # Установите True для логирования SQL-запросов
-    pool_pre_ping=True
+    echo=settings.DEBUG,  # Логирование SQL только в DEBUG
+    pool_size=20,  # Размер пула соединений
+    max_overflow=0,  # Без дополнительных соединений сверх pool_size
+    pool_pre_ping=True,  # Проверка соединения перед использованием
 )
 
-# Создаем фабрику сессий
+# ========== SESSION FACTORY ==========
 AsyncSessionLocal = async_sessionmaker(
-    engine,
-    expire_on_commit=False
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,  # ✅ Важно для async работы
 )
 
 
-async def get_db_session():
-    """Генератор сессии базы данных для Dependency Injection"""
+# ========== DEPENDENCY INJECTION ==========
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]: 
+    """
+    Генератор сессии БД для Dependency Injection. 
+    Использование: 
+        async def handler(message: Message, db_session: AsyncSession):
+    """
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -31,24 +52,36 @@ async def get_db_session():
             await session.close()
 
 
-async def init_db():
-    """Инициализация базы данных - создание таблиц"""
-    # Импортируем Base внутри функции, чтобы избежать циклических импортов
-    from models import Base
-    async with engine.begin() as conn:
-        # Создаем все таблицы
-        await conn.run_sync(Base.metadata.create_all)
-
-    logger.info("Database tables created successfully")
-
-
-async def test_connection():
-    """Тест подключения к базе данных"""
+# ========== INITIALIZATION ==========
+async def init_db() -> None:
+    """
+    Инициализация БД:  создание всех таблиц.
+    ВАЖНО: Вызывать ДО запуска бота!
+    """
     try:
+        logger.info("Initializing database...")
         async with engine.begin() as conn:
+            # ✅ Создаем таблицы из ЕДИНСТВЕННОГО Base
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("✅ Database initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}", exc_info=True)
+        raise
+
+
+async def test_connection() -> bool:
+    """Проверка подключения к БД"""
+    try:
+        async with engine. begin() as conn:
             await conn.execute(text("SELECT 1"))
-        logger.info("Database connection successful")
+        logger.info("✅ Database connection successful")
         return True
     except Exception as e:
-        logger.error(f"Database connection failed: {e}")
+        logger. error(f"❌ Database connection failed: {e}")
         return False
+
+
+async def dispose_db() -> None:
+    """Закрытие всех соединений (при завершении приложения)"""
+    await engine.dispose()
+    logger.info("Database connections disposed")
