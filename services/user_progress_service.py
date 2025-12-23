@@ -324,3 +324,129 @@ class UserProgressService:
         except Exception as e:
             logger.error(f"Error getting progress details: {e}", exc_info=True)
             return None
+
+    async def mark_mission_completed(
+    self,
+    user_id: int,
+    group_id: int,
+    mission_id: int
+    ) -> bool:
+        """
+        Отметить миссию как выполненную и обновить прогресс группы
+        
+        Returns:
+            True если группа полностью завершена, False иначе
+        """
+        try:
+            # Получаем прогресс
+            progress = await self.get_or_create_progress(user_id, group_id)
+            
+            if progress.is_completed:
+                logger.warning(f"Group {group_id} already completed by user {user_id}")
+                return True
+            
+            # Увеличиваем счетчик выполненных миссий
+            progress.completed_missions = (progress.completed_missions or 0) + 1
+            
+            # Добавляем очки миссии
+            from models. mission import Mission
+            mission_result = await self.db_session.execute(
+                select(Mission).where(Mission.id == mission_id)
+            )
+            mission = mission_result. scalar_one_or_none()
+            
+            if mission:
+                progress.points_earned = (progress.points_earned or 0) + mission.points_reward
+            
+            # Проверяем завершена ли группа полностью
+            group_result = await self.db_session.execute(
+                select(MissionGroup).where(MissionGroup.id == group_id)
+            )
+            group = group_result.scalar_one_or_none()
+            
+            is_group_completed = False
+            
+            if group and progress.completed_missions >= progress.total_missions:
+                progress.is_completed = True
+                progress.completed_at = datetime.utcnow()
+                progress. bonus_earned = True
+                is_group_completed = True
+                
+                logger.info(f"✅ Group {group_id} completed by user {user_id}")
+                
+                # Добавляем бонус пользователю
+                if group.completion_bonus and group.completion_bonus > 0:
+                    user_result = await self.db_session.execute(
+                        select(User).where(User.user_id == user_id)
+                    )
+                    user = user_result.scalar_one_or_none()
+                    
+                    if user: 
+                        user.points = (user.points or 0) + group.completion_bonus
+                        logger.info(
+                            f"🎁 Awarded {group.completion_bonus} bonus points "
+                            f"to user {user_id} for completing group {group_id}"
+                        )
+            
+            await self.db_session.commit()
+            return is_group_completed
+            
+        except Exception as e:
+            logger.error(f"Error marking mission completed: {e}", exc_info=True)
+            await self.db_session.rollback()
+            return False
+
+    async def send_group_completion_notification(
+        self,
+        user_id: int,
+        group_id: int
+    ) -> None:
+        """
+        Отправить поздравительное уведомление при завершении группы
+        """
+        try: 
+            from services.notification_service import NotificationService
+            
+            # Получаем информацию о группе и прогрессе
+            group_result = await self.db_session.execute(
+                select(MissionGroup).where(MissionGroup.id == group_id)
+            )
+            group = group_result.scalar_one_or_none()
+            
+            progress_result = await self.db_session.execute(
+                select(UserGroupProgress).where(
+                    and_(
+                        UserGroupProgress. user_id == user_id,
+                        UserGroupProgress.group_id == group_id
+                    )
+                )
+            )
+            progress = progress_result.scalar_one_or_none()
+            
+            if not group or not progress:
+                return
+            
+            # Формируем текст поздравления
+            message = (
+                f"🏆 <b>Поздравляем!</b>\n\n"
+                f"Вы успешно завершили группу миссий:\n"
+                f"<b>{group.emoji} {group.name}</b>\n\n"
+                f"📊 Статистика:\n"
+                f"✅ Выполнено миссий: {progress.completed_missions}/{progress.total_missions}\n"
+                f"⭐ Заработано очков: {progress.points_earned}\n"
+                f"🎁 Бонус: +{group.completion_bonus} очков\n\n"
+                f"Попробуйте другие группы или возвращайтесь за ежедневными миссиями!"
+            )
+            
+            notification_service = NotificationService(self.db_session)
+            await notification_service.schedule_notification(
+                user_id,
+                "group_completed",
+                message,
+                title=f"✅ Группа завершена:  {group.name}"
+            )
+            
+            logger.info(f"📤 Sent completion notification for group {group_id} to user {user_id}")
+            
+        except Exception as e: 
+            logger.error(f"Error sending completion notification: {e}", exc_info=True)

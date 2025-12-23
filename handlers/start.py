@@ -148,7 +148,7 @@ async def cmd_profile(message: Message, db_session: AsyncSession) -> None:
 @router.message(Command("stats"))
 async def cmd_stats(message: Message, db_session: AsyncSession) -> None:
     """
-    Команда /stats — статистика пользователя.
+    Команда /stats — расширенная статистика с информацией о группах.
     """
     try:
         user_service = UserService(db_session)
@@ -163,26 +163,60 @@ async def cmd_stats(message: Message, db_session: AsyncSession) -> None:
         )
         total_completed = result.scalar_one_or_none() or 0
 
+        # ========== НОВОЕ: Получаем информацию о группах ==========
+        # Завершенные группы
+        group_result = await db_session. execute(
+            select(func.count(UserGroupProgress.id)).where(
+                and_(
+                    UserGroupProgress.user_id == user.user_id,
+                    UserGroupProgress.is_completed == True
+                )
+            )
+        )
+        groups_completed = group_result.scalar_one_or_none() or 0
+        
+        # Активные группы (в процессе)
+        active_group_result = await db_session. execute(
+            select(func. count(UserGroupProgress.id)).where(
+                and_(
+                    UserGroupProgress.user_id == user.user_id,
+                    UserGroupProgress.is_completed == False
+                )
+            )
+        )
+        groups_in_progress = active_group_result.scalar_one_or_none() or 0
+
         # Прогресс к следующему уровню
         next_level_points = 100
         current_progress = user.points % next_level_points
         progress_percent = int((current_progress / next_level_points) * 100)
 
+        # Формируем прогресс-бар
+        progress_bar = "█" * int(progress_percent / 10) + "░" * (10 - int(progress_percent / 10))
+
         stats_text = (
             "📊 <b>Ваша статистика</b>\n\n"
-            f"⭐ <b>Уровень:</b> {user.level}\n"
-            f"🎯 <b>Очки:</b> {user.points}\n"
-            f"📈 <b>Прогресс к уровню:</b> {current_progress}/100 ({progress_percent}%)\n"
-            f"✅ <b>Выполнено миссий:</b> {total_completed}\n"
-            f"⚡ <b>Зарядов осталось:</b> {user. charges}/3\n"
+            f"<b>⭐ Уровень: </b> {user.level}\n"
+            f"<b>🎯 Очки:</b> {user.points}\n"
+            f"<b>📈 Прогресс к уровню:</b>\n"
+            f"[{progress_bar}] {progress_percent}%\n"
+            f"{current_progress}/100\n\n"
+            f"<b>📝 Миссии:</b>\n"
+            f"✅ Выполнено всего: {total_completed}\n\n"
+            f"<b>📦 Группы миссий:</b>\n"
+            f"✅ Завершено: {groups_completed}\n"
+            f"🔄 В процессе: {groups_in_progress}\n\n"
+            f"<b>⚡ Системное: </b>\n"
+            f"Зарядов осталось: {user.charges}/3\n"
+            f"Дата присоединения: {user.created_at.strftime('%d. %m.%Y')}"
         )
 
         await message.answer(stats_text, parse_mode="HTML")
         await db_session.commit()
 
     except Exception as e:
-        logger.error(f"Error in cmd_stats:  {e}", exc_info=True)
-        await message.answer("❌ Ошибка при получении статистики.")
+        logger. error(f"Error in cmd_stats: {e}", exc_info=True)
+        await message. answer("❌ Ошибка при получении статистики.")
 
 
 @router.message(F.text == "🎯 Получить миссию")

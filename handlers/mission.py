@@ -189,10 +189,12 @@ async def report_mission(
 ) -> None:
     """
     Обработка отчета о выполнении миссии (текст или фото).
+    Теперь обновляет прогресс группы если миссия из группы.
     """
     try:
         data = await state.get_data()
-        mission_id = data. get("mission_id")
+        mission_id = data.get("mission_id")
+        group_id = data.get("group_id")  # Новое поле
 
         if not mission_id: 
             await message.answer("❌ Ошибка: миссия не найдена в памяти.")
@@ -214,12 +216,12 @@ async def report_mission(
 
         if message.photo:
             report_type = "photo"
-            report_content = message.photo[-1].file_id  # Берем самое большое фото
+            report_content = message.photo[-1].file_id
 
         # Создаем запись о выполнении
         completion_service = CompletionService(db_session)
         completion = await completion_service.create_completion(
-            user_id=message. from_user.id,
+            user_id=message.from_user.id,
             mission_id=mission_id,
             report_type=report_type,
             report_content=report_content,
@@ -228,8 +230,27 @@ async def report_mission(
 
         # Добавляем очки пользователю
         user_service = UserService(db_session)
-        user = await user_service.get_or_create_user(message.from_user. id)
+        user = await user_service.get_or_create_user(message. from_user.id)
         await user_service.add_points(user, mission.points_reward)
+        
+        # ========== НОВОЕ:  Обновляем прогресс группы если миссия из группы ==========
+        is_group_completed = False
+        
+        if group_id: 
+            progress_service = UserProgressService(db_session)
+            is_group_completed = await progress_service.mark_mission_completed(
+                message.from_user.id,
+                group_id,
+                mission_id
+            )
+            
+            # Если группа завершена - отправляем уведомление
+            if is_group_completed: 
+                await progress_service.send_group_completion_notification(
+                    message. from_user.id,
+                    group_id
+                )
+        
         await db_session.commit()
 
         # Просим оценить миссию
@@ -239,8 +260,16 @@ async def report_mission(
         response_text = (
             f"✅ <b>Отчет принят!</b>\n\n"
             f"🎉 +{mission.points_reward} очков\n\n"
-            f"<b>Как тебе миссия? </b>"
         )
+        
+        # Добавляем информацию о группе если она завершена
+        if is_group_completed:
+            response_text += (
+                f"🏆 <b>Группа завершена!</b>\n\n"
+                f"Поздравляем с завершением! Попробуйте другие группы.\n\n"
+            )
+        
+        response_text += f"<b>Как тебе миссия? </b>"
 
         # Кнопки оценки (1-5 звезд)
         keyboard = InlineKeyboardMarkup(
@@ -262,8 +291,8 @@ async def report_mission(
         await message.answer("❌ Миссия удалена.  Получите новую:  /mission")
         await state.clear()
     except Exception as e:
-        logger. error(f"Error in report_mission: {e}", exc_info=True)
-        await message. answer("❌ Ошибка при обработке отчета.")
+        logger.error(f"Error in report_mission: {e}", exc_info=True)
+        await message.answer("❌ Ошибка при обработке отчета.")
         await state.clear()
 
 
@@ -315,22 +344,35 @@ async def rate_mission(callback:  CallbackQuery, db_session: AsyncSession, state
 
 
 @router.message(Command("gallery"))
-@router.message(F.text == "🖼 Галерея")
+@router.message(F. text == "🖼 Галерея")
 async def cmd_gallery(message: Message, db_session: AsyncSession) -> None:
     """
-    Команда /gallery — показать все выполненные миссии. 
+    Команда /gallery — показать все выполненные миссии и завершенные группы. 
     """
-    try:
-        # Получаем все выполнения пользователя
+    try: 
+        user_id = message.from_user.id
+        
+        # Получаем выполненные миссии
         result = await db_session.execute(
             select(Completion)
-            .where(Completion. telegram_user_id == message. from_user.id)
+            .where(Completion.telegram_user_id == user_id)
             .order_by(desc(Completion.completed_at))
             .limit(10)
         )
         completions = result.scalars().all()
 
-        if not completions: 
+        # Получаем завершенные группы
+        group_result = await db_session. execute(
+            select(UserGroupProgress).where(
+                and_(
+                    UserGroupProgress.user_id == user_id,
+                    UserGroupProgress.is_completed == True
+                )
+            ).order_by(desc(UserGroupProgress.completed_at))
+        )
+        completed_groups = group_result.scalars().all()
+
+        if not completions and not completed_groups:
             await message.answer(
                 "🖼 <b>Ваша галерея пуста</b>\n\n"
                 "Выполните несколько миссий, чтобы они появились здесь!\n"
@@ -340,21 +382,40 @@ async def cmd_gallery(message: Message, db_session: AsyncSession) -> None:
             return
 
         # Формируем сообщение
-        text = f"🖼 <b>Ваша галерея</b> ({len(completions)} выполнено)\n\n"
+        text = "🖼 <b>Ваша галерея</b>\n\n"
+        
+        # Завершенные группы
+        if completed_groups:
+            text += "<b>🏆 Завершенные группы:</b>\n"
+            for group_progress in completed_groups[: 5]: 
+                group_result = await db_session.execute(
+                    select(MissionGroup).where(MissionGroup.id == group_progress.group_id)
+                )
+                group = group_result. scalar_one_or_none()
+                if group:
+                    date_str = group_progress.completed_at.strftime("%d. %m.%Y") if group_progress.completed_at else "—"
+                    text += (
+                        f"✅ {group.emoji} <b>{group.name}</b> ({date_str})\n"
+                        f"   {group_progress.completed_missions}/{group_progress.total_missions} миссий\n"
+                    )
+            text += "\n"
+        
+        # Недавние миссии
+        if completions: 
+            text += "<b>📝 Последние выполненные миссии:</b>\n"
+            for i, completion in enumerate(completions[: 5], 1):
+                date_str = completion.completed_at.strftime("%d.%m.%Y %H:%M") if completion.completed_at else "—"
+                rating_str = "⭐" * (completion.rating or 0) if hasattr(completion, "rating") else ""
+                
+                text += (
+                    f"{i}.  {date_str} {rating_str}\n"
+                    f"   Награда: +{completion.points_reward} очков\n"
+                )
+        
+        if len(completions) > 5 or len(completed_groups) > 5:
+            text += f"\n...  и ещё больше!"
 
-        for i, completion in enumerate(completions[: 5], 1):
-            date_str = completion.completed_at.strftime("%d. %m.%Y %H:%M") if completion.completed_at else "—"
-            rating_str = "⭐" * (completion.rating or 0) if hasattr(completion, "rating") else ""
-
-            text += (
-                f"{i}. {date_str}\n"
-                f"   Награда: +{completion.points_reward} очков {rating_str}\n"
-            )
-
-        if len(completions) > 5:
-            text += f"\n... и ещё {len(completions) - 5} миссий"
-
-        await message. answer(text, parse_mode="HTML")
+        await message.answer(text, parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Error in cmd_gallery: {e}", exc_info=True)
