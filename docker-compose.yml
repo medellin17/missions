@@ -1,92 +1,93 @@
 version: '3.8'
 
 services:
-  # ========== POSTGRESQL ==========
-  db:
-    image: postgres:16-alpine
-    container_name: micro_mission_db
+  postgres:
+    image: postgres:15
+    container_name: missions-postgres
     environment:
-      POSTGRES_USER: ${DATABASE_USER:-micro_mission}
-      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-change_me_in_production}
-      POSTGRES_DB: ${DATABASE_NAME:-micro_mission}
-    volumes: 
-      - postgres_data:/var/lib/postgresql/data
+      POSTGRES_USER: micro_mission
+      POSTGRES_PASSWORD: password  # ⚠️ В продакшене переместить в .env
+      POSTGRES_DB: missions
     ports:
       - "5432:5432"
-    healthcheck: 
-      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-micro_mission}"]
+    volumes: 
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - missions-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U micro_mission"]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - bot_network
 
-  # ========== REDIS ==========
   redis: 
     image: redis:7-alpine
-    container_name: micro_mission_redis
-    command:  redis-server --appendonly yes
-    volumes:
-      - redis_data:/data
-    ports: 
+    container_name: missions-redis
+    ports:
       - "6379:6379"
+    networks:
+      - missions-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - bot_network
 
-  # ========== BOT ==========
-  bot: 
-    build: 
-      context: .
-      dockerfile: Dockerfile
-    container_name: micro_mission_bot
-    environment:
-      # Телеграм
-      BOT_TOKEN: ${BOT_TOKEN}
-      ADMIN_IDS: ${ADMIN_IDS:-[]}
-      
-      # БД
-      DATABASE_HOST: db
-      DATABASE_PORT: 5432
-      DATABASE_USER: ${DATABASE_USER:-micro_mission}
-      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-change_me_in_production}
-      DATABASE_NAME: ${DATABASE_NAME:-micro_mission}
-      
-      # Redis
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_DB: 0
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      
-      # Логирование
-      LOG_LEVEL:  ${LOG_LEVEL:-INFO}
-      
-      # Окружение
-      ENVIRONMENT: ${ENVIRONMENT:-production}
-      DEBUG: ${DEBUG:-False}
+  bot:
+    build: .
+    container_name: missions-bot-1
     depends_on:
-      db:
+      postgres:
         condition: service_healthy
       redis:
         condition:  service_healthy
-    networks: 
-      - bot_network
+    environment: 
+      # ========== BOT ==========
+      BOT_TOKEN: ${BOT_TOKEN}  # ✅ Из .env файла
+      ADMIN_IDS: ${ADMIN_IDS}
+      
+      # ========== DATABASE ==========
+      DATABASE_HOST: postgres
+      DATABASE_PORT:  "5432"
+      DATABASE_USER: micro_mission
+      DATABASE_PASSWORD: password  # ⚠️ Из .env
+      DATABASE_NAME: missions
+      
+      # ========== REDIS ==========
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      
+      # ========== MISSION SETTINGS ==========
+      MAX_CHARGES_PER_DAY: "3"
+      CHARGE_RESET_TIME: "00:00"
+      DEFAULT_MISSION_POINTS: "10"
+      
+      # ========== PAIR SETTINGS ==========
+      MAX_PAIR_USERS: "2"
+      PAIR_TIMEOUT_MINUTES: "30"
+      
+      # ========== LOGGING ==========
+      LOG_LEVEL: "INFO"
+      
+      # ========== ENVIRONMENT ==========
+      ENVIRONMENT: "production"
+      DEBUG: "false"
+    
+    # ✅ УДАЛИТЬ volume в продакшене (используй только COPY)
+    # volumes:
+    #   - .  :/app
+    
+    ports:
+      - "8000:8000"
+    networks:
+      - missions-network
     restart: unless-stopped
-    # Логи
-    logging:
-      driver:  "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
 volumes:
   postgres_data: 
-  redis_data: 
 
 networks:
-  bot_network: 
+  missions-network: 
     driver: bridge

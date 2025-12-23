@@ -1,7 +1,7 @@
 # bot/main.py
 """
-Главная точка входа бота.
-Инициализация, регистрация handlers, запуск polling.
+Главная точка входа бота. 
+Инициализация, регистрация handlers, запуск polling. 
 """
 
 import asyncio
@@ -9,16 +9,16 @@ import logging
 from typing import NoReturn
 
 from aiogram import Bot, Dispatcher
-from aiogram.fsm.storage.redis import RedisStorage
+from aiogram. fsm. storage.redis import RedisStorage
 from aiogram.fsm.strategy import FSMStrategy
-from redis. asyncio import Redis
+from redis.asyncio import Redis
 
 from core.config import settings
-from core.database import init_db, dispose_db, test_connection
+from core. database import init_db, dispose_db, test_connection
 from core.scheduler import NotificationScheduler
 from core.middleware import DatabaseSessionMiddleware
 
-# Регистрируем handlers (ЧИСТЫЕ импорты без try/except)
+# ✅ Импортируем handlers модули (они регистрируют свои routers)
 from handlers import (
     start,
     mission,
@@ -26,9 +26,9 @@ from handlers import (
     notification,
     theme_week,
     mission_groups,
-    mission_groups_user,
+    mission_groups_user,  # ✅ ДОБАВИЛ (был в __all__, но не импортирован)
 )
-from handlers.admin import admin_analytics, admin_missions, admin_users
+from handlers.admin import analytics as admin_analytics, missions as admin_missions, users as admin_users
 
 # Настройка логирования
 logging.basicConfig(
@@ -39,13 +39,8 @@ logger = logging.getLogger(__name__)
 
 
 async def setup_storage() -> tuple[RedisStorage, Redis]:
-    """
-    Инициализация Redis хранилища для FSM.
-    
-    Returns:
-        (RedisStorage, Redis client) для корректного закрытия
-    """
-    logger.info(f"Connecting to Redis: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
+    """Инициализация Redis хранилища для FSM."""
+    logger.info(f"Connecting to Redis:  {settings.REDIS_HOST}:{settings.REDIS_PORT}")
     
     redis_client = Redis(
         host=settings.REDIS_HOST,
@@ -56,33 +51,30 @@ async def setup_storage() -> tuple[RedisStorage, Redis]:
     )
     
     # Тест соединения
-    try: 
+    try:  
         await redis_client.ping()
         logger.info("✅ Redis connection successful")
     except Exception as e:
-        logger.error(f"❌ Redis connection failed: {e}")
+        logger.error(f"❌ Redis connection failed:  {e}")
         raise
     
     storage = RedisStorage(
         redis=redis_client,
-        state_ttl=86400,  # 24 часа (по умолчанию)
+        state_ttl=86400,
         data_ttl=86400,
         key_builder=None,
-        fsm_strategy=FSMStrategy. CHAT_MEMBER_ID,  # Изолируем состояния по чату и пользователю
+        fsm_strategy=FSMStrategy. CHAT_MEMBER_ID,
     )
     
     return storage, redis_client
 
 
 async def setup_dispatcher(bot: Bot, storage: RedisStorage) -> Dispatcher:
-    """
-    Конфигурирование dispatcher:  middleware, handlers, роутеры.
-    """
+    """Конфигурирование dispatcher:  middleware, handlers, роутеры."""
     dp = Dispatcher(storage=storage)
     
     # ========== MIDDLEWARE ==========
-    # Добавляем middleware для сессии БД (ПЕРЕД handlers)
-    dp.message. middleware(DatabaseSessionMiddleware())
+    dp.message.middleware(DatabaseSessionMiddleware())
     dp.callback_query.middleware(DatabaseSessionMiddleware())
     dp.errors.middleware(DatabaseSessionMiddleware())
     
@@ -90,17 +82,16 @@ async def setup_dispatcher(bot: Bot, storage: RedisStorage) -> Dispatcher:
     # Порядок важен:  общие handlers → специфичные
     dp.include_router(start.router)
     dp.include_router(mission.router)
+    dp.include_router(mission_groups.router)
+    dp.include_router(mission_groups_user.router)  # ✅ ДОБАВИЛ
     dp.include_router(pair.router)
     dp.include_router(notification.router)
-    dp.include_router(theme_week. router)
-    dp.include_router(mission_groups.router)
-    dp.include_router(mission_groups_user.router)
+    dp.include_router(theme_week.router)
     
-    # Admin handlers (в отдельной папке)
+    # Admin handlers
     dp.include_router(admin_analytics.router)
     dp.include_router(admin_missions.router)
     dp.include_router(admin_users.router)
-    
     
     logger.info("✅ All routers registered")
     
@@ -108,11 +99,8 @@ async def setup_dispatcher(bot: Bot, storage: RedisStorage) -> Dispatcher:
 
 
 async def main() -> NoReturn:
-    """
-    Главная функция запуска бота.
-    Инициализирует БД, подключается к Redis, запускает polling.
-    """
-    logger.info(f"🤖 Starting Micro-Mission Bot (env={settings. ENVIRONMENT})")
+    """Главная функция запуска бота."""
+    logger.info(f"🤖 Starting Micro-Mission Bot (env={settings.ENVIRONMENT})")
     
     # ========== DATABASE ==========
     logger.info("Initializing database...")
@@ -135,7 +123,7 @@ async def main() -> NoReturn:
             scheduler.start_scheduler(),
         )
     except KeyboardInterrupt:
-        logger. info("Received KeyboardInterrupt")
+        logger.info("Received KeyboardInterrupt")
     finally:
         logger.info("Shutting down...")
         await dp.storage.close()

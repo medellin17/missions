@@ -1,11 +1,23 @@
 #/handlers/__init__.py
 """Регистрация всех handlers и роутеров"""
 
-# Основные handlers
-from .  import start, mission, pair, notification, theme_week, mission_groups
+# Основные handlers (явные импорты)
+from . import (
+    start,
+    mission,
+    pair,
+    notification,
+    theme_week,
+    mission_groups,
+    mission_groups_user,  # ✅ Добавил явно
+)
 
-# Admin handlers (из отдельной папки)
-from .admin import analytics, missions, users
+# Admin handlers
+from .admin import (
+    analytics,
+    missions as admin_missions,
+    users as admin_users,
+)
 
 __all__ = [
     "start",
@@ -14,8 +26,8 @@ __all__ = [
     "notification",
     "theme_week",
     "mission_groups",
-    "mission_groups_user",
+    "mission_groups_user",  # ✅ Было в __all__, но не импортировано в bot/main.py
     "analytics",
-    "missions",
-    "users",
+    "admin_missions",
+    "admin_users",
 ]

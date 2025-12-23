@@ -1,6 +1,6 @@
-/core/config.py
+#/core/config.py
 """
-Конфигурация приложения через Pydantic.
+Конфигурация приложения через Pydantic. 
 Все переменные берутся из . env файла.
 """
 
@@ -45,9 +45,9 @@ class Settings(BaseSettings):
         if self.REDIS_PASSWORD: 
             return (
                 f"redis://:{self.REDIS_PASSWORD}@"
-                f"{self. REDIS_HOST}:{self. REDIS_PORT}/{self.REDIS_DB}"
+                f"{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
             )
-        return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+        return f"redis://{self.REDIS_HOST}:{self. REDIS_PORT}/{self.REDIS_DB}"
     
     # ========== MISSION SETTINGS ==========
     MAX_CHARGES_PER_DAY: int = 3
@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     
     class Config:
         """Pydantic configuration"""
-        env_file = ".env"
+        env_file = ". env"
         env_file_encoding = "utf-8"
         case_sensitive = True
         
