@@ -1,0 +1,63 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - .:/app  # монтируем текущую директорию в контейнер для разработки
+    depends_on:
+      db:
+        condition: service_healthy  # Ждать, пока db не будет "healthy"
+      redis:
+        condition: service_started # redis обычно быстрее готов
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://micro_mission:password@db:5432/micro_mission
+      - REDIS_URL=redis://redis:6379
+    restart: unless-stopped
+    # Используем literal block scalar для многострочной команды
+    command: |
+      sh -c "
+      echo '🔄 Applying migrations...' &&
+      alembic upgrade head &&
+      echo '✅ Migrations applied' &&
+      sleep 2 &&
+      echo '🚀 Starting bot...' &&
+      python -m bot.main
+      "
+
+
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: micro_mission
+      POSTGRES_USER: micro_mission
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # Используем именованный том
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    # Добавляем healthcheck для PostgreSQL
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U micro_mission -d micro_mission"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s # Время, в течение которого healthcheck может не пройти без пометки как unhealthy
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    # Добавляем healthcheck для redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  postgres_data: # Объявляем том как mapping, используя двоеточие

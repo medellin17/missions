@@ -1,0 +1,2 @@
+# Делаем скрипт исполняемым
+chmod +x scripts/manual_seed.sh
